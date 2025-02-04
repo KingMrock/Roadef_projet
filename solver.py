@@ -62,6 +62,8 @@ def build_model(instance):
     # Compute a tight M for the risk constraints.
     M_risk = compute_tight_M(instance)
     print("Computed tight M for risk constraints:", M_risk)
+
+    print("Building Decision Variables")
     
     # 1. Decision Variables: For each intervention i and each possible start s (1..tmax)
     x = {}
@@ -74,6 +76,8 @@ def build_model(instance):
             mdl.sum(x[i][s] for s in range(1, tmax+1)) == 1,
             ctname=f"start_once_{i}"
         )
+
+    print("Adding Ressource Constraints")
     
     # 2. Resource Constraints
     for r, r_data in resources.items():
@@ -95,6 +99,8 @@ def build_model(instance):
                 mdl.add_constraint(usage_expr <= max_array[t-1], ctname=f"capacity_{r}_{t}")
                 mdl.add_constraint(usage_expr >= min_array[t-1], ctname=f"min_capacity_{r}_{t}")
     
+
+    print("Adding Active Variables and Exclusions")
     # 3. Active Variables for Exclusions: active[i,t]=1 if intervention i is active at time t.
     active = {}
     for i, data in interventions.items():
@@ -122,6 +128,8 @@ def build_model(instance):
                     ctname=f"excl_{i1}_{i2}_{t_int}"
                 )
     
+
+    print("Compute Risk Model")
     # 4. Risk Model
     # Determine number of scenarios (assume risk lists have the same length).
     scenario_count = None
@@ -139,6 +147,8 @@ def build_model(instance):
         scenario_count = 1
     scenario_indices = range(scenario_count)
     
+
+    print("Computing Quantile values")
     # Create Q[t] variables and risk expression (and z[t,sc] binary flags).
     Q = { t: mdl.continuous_var(name=f"Q_{t}") for t in range(1, T+1) }
     z = {}
@@ -163,6 +173,8 @@ def build_model(instance):
             ctname=f"quantile_{t}"
         )
     
+
+    print("Building Objective Function")
     # Compute mean risk over scenarios at each time t.
     mean_risk = {}
     for t in range(1, T+1):
@@ -211,11 +223,18 @@ def main():
 
     mdl = build_model(instance)
 
+
     #get time needed to build the model
     curr = time.time()-start
 
+    print("Model built in ", curr, " seconds")
+
     #set time limit for the solver as the remaining time
     args.time = args.time - curr
+
+    #print remaining time
+    print("Time remaining for the solver: ", args.time, " seconds")
+
 
     if args.time:
         mdl.parameters.timelimit = args.time
@@ -235,7 +254,7 @@ def main():
                 tmax_i = int(data_i["tmax"])
                 start_chosen = None
                 for s in range(1, tmax_i+1):
-                    if solution.get_value(mdl.x[i][s]) > 0.5:
+                    if solution.get_value(mdl._x[i][s]) > 0.5:
                         start_chosen = s
                         break
                 fsol.write(f"{i} {start_chosen}\n")
@@ -245,4 +264,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
