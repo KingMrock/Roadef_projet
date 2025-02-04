@@ -1,0 +1,2 @@
+A_set/0*.json filter=lfs diff=lfs merge=lfs -text
+A_set/A_0*.json filter=lfs diff=lfs merge=lfs -text
