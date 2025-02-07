@@ -188,9 +188,10 @@ def build_model(instance):
         mdl.add_constraint(e[t] >= Q[t] - mean_risk[t], ctname=f"def_excess_{t}")
     
     # 6. Objective: weighted combination of mean risk and excess.
-    obj1_expr = mdl.sum(mean_risk[t] for t in range(1, T+1))
-    obj2_expr = mdl.sum(e[t] for t in range(1, T+1))
+    obj1_expr = (1.0 / T) * mdl.sum(mean_risk[t] for t in range(1, T+1))
+    obj2_expr = (1.0 / T) * mdl.sum(e[t] for t in range(1, T+1))
     mdl.minimize(alpha * obj1_expr + (1 - alpha) * obj2_expr)
+
     
     # Store x in the model so we can retrieve the decision values later.
     mdl._x = x
