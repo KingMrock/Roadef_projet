@@ -1,8 +1,45 @@
 import json
 from docplex.mp.model import Model
+from docplex.mp.progress import ProgressListener
 import argparse
 import time
 import os
+
+class MyProgressListener(ProgressListener):
+    """
+    Custom progress listener to capture solver progress details.
+    It tracks:
+      - The time when the first solution is found and its value.
+      - The current best solution value and gap.
+    """
+    def __init__(self):
+        super().__init__()
+        self.first_solution_time = None
+        self.first_solution_value = None
+        self.best_solution_value = None
+        self.gap = None
+
+    def notify_progress(self, progress_data):
+        # Access progress time
+        current_time = progress_data.time
+        # Retrieve best solution value using current_objective
+        current_solution = progress_data.current_objective
+        # Retrieve the relative gap (if available)
+        current_gap = progress_data.mip_gap
+
+        # Record the first solution when it appears
+        if current_solution is not None and self.first_solution_time is None:
+            self.first_solution_time = current_time
+            self.first_solution_value = current_solution
+            
+        # Update best solution value if we have one
+        if current_solution is not None:
+            self.best_solution_value = current_solution
+            
+        # Update gap if we have one
+        if current_gap is not None:
+            self.gap = current_gap
+
 
 def compute_tight_M(instance):
     """
@@ -15,8 +52,6 @@ def compute_tight_M(instance):
     T = int(instance["T"])
     # R[i][t] holds the maximum risk for intervention i at time t.
     R = { i: { t: 0 for t in range(1, T+1) } for i in interventions }
-
-
     
     for i, data in interventions.items():
         tmax = int(data["tmax"])
@@ -45,7 +80,6 @@ def risk_value(i, t, s, interventions, n_scenarios):
     if len(risk_list) < n_scenarios:
         risk_list = risk_list + [0]*(n_scenarios - len(risk_list))
     return risk_list
-
 
 def build_model(instance):
     mdl = Model("Grid_Interventions")
@@ -77,7 +111,7 @@ def build_model(instance):
             ctname=f"start_once_{i}"
         )
 
-    print("Adding Ressource Constraints")
+    print("Adding Resource Constraints")
     
     # 2. Resource Constraints
     for r, r_data in resources.items():
@@ -99,7 +133,6 @@ def build_model(instance):
                 mdl.add_constraint(usage_expr <= max_array[t-1], ctname=f"capacity_{r}_{t}")
                 mdl.add_constraint(usage_expr >= min_array[t-1], ctname=f"min_capacity_{r}_{t}")
     
-
     print("Adding Active Variables and Exclusions")
     # 3. Active Variables for Exclusions: active[i,t]=1 if intervention i is active at time t.
     active = {}
@@ -128,7 +161,6 @@ def build_model(instance):
                     ctname=f"excl_{i1}_{i2}_{t_int}"
                 )
     
-
     print("Compute Risk Model")
     # 4. Risk Model
     # Determine number of scenarios (assume risk lists have the same length).
@@ -147,20 +179,32 @@ def build_model(instance):
         scenario_count = 1
     scenario_indices = range(scenario_count)
     
+    print("Precomputing risk contributions for quantile constraints")
+    # Precompute risk contributions for each (t, i, s) tuple that satisfies the activity condition.
+    # For each time period t, we create a dictionary mapping (i, s) -> risk list.
+    precomputed_risk = {}
+    for t in range(1, T+1):
+        precomputed_risk[t] = {}
+        for i, data in interventions.items():
+            tmax_i = int(data["tmax"])
+            for s in range(1, tmax_i+1):
+                if s <= t < s + data["Delta"][s-1]:
+                    # Compute risk once and store it.
+                    risk_list = risk_value(i, t, s, interventions, scenario_count)
+                    precomputed_risk[t][(i, s)] = risk_list
 
     print("Computing Quantile values")
-    # Create Q[t] variables and risk expression (and z[t,sc] binary flags).
+    # Now create Q[t] variables and risk expressions using precomputed values.
     Q = { t: mdl.continuous_var(name=f"Q_{t}") for t in range(1, T+1) }
     z = {}
     risk_expr = {}
     for t in range(1, T+1):
         for sc in scenario_indices:
-            # Sum contributions from all interventions that are active at time t.
+            # Sum contributions from interventions that are active at time t,
+            # using precomputed risk values.
             expr = mdl.sum(
-                x[i][s] * risk_value(i, t, s, interventions, scenario_count)[sc]
-                for i, data in interventions.items()
-                for s in range(1, int(data["tmax"])+1)
-                if s <= t < s + data["Delta"][s-1]
+                x[i][s] * precomputed_risk[t][(i, s)][sc]
+                for (i, s) in precomputed_risk[t].keys()
             )
             risk_expr[(t, sc)] = expr
             z[(t, sc)] = mdl.binary_var(name=f"z_{t}_{sc}")
@@ -172,8 +216,8 @@ def build_model(instance):
             mdl.sum(z[(t, sc)] for sc in scenario_indices) <= (1 - quantile) * scenario_count,
             ctname=f"quantile_{t}"
         )
-    
 
+    
     print("Building Objective Function")
     # Compute mean risk over scenarios at each time t.
     mean_risk = {}
@@ -192,19 +236,17 @@ def build_model(instance):
     obj2_expr = (1.0 / T) * mdl.sum(e[t] for t in range(1, T+1))
     mdl.minimize(alpha * obj1_expr + (1 - alpha) * obj2_expr)
 
-    
     # Store x in the model so we can retrieve the decision values later.
     mdl._x = x
     return mdl
 
-    
-
 def main():
-    
     parser = argparse.ArgumentParser(description="Solve the intervention scheduling problem.")
     parser.add_argument("instance_file", type=str, help="Path to the JSON instance file.")
-    parser.add_argument("--solution", "-s", type=str, default="example_solution.txt", help="Path to the solution export file.")
-    parser.add_argument("--time", "-t", type=int, default=600, help="Time limit for the solver in seconds.")
+    parser.add_argument("--solution", "-s", type=str, default="example_solution.txt",
+                        help="Path to the solution export file.")
+    parser.add_argument("--time", "-t", type=int, default=600,
+                        help="Time limit for the solver in seconds.")
     
     args = parser.parse_args()
 
@@ -217,37 +259,53 @@ def main():
     
     interventions = instance["Interventions"]
     
-    #get start time
-    start = time.time()
+    # Prepare the log file name based on the instance file name.
+    base_name = os.path.splitext(args.instance_file)[0]
+    log_filename = base_name + "_log.txt"
 
+    # Get start time for model building.
+    build_start = time.time()
     print("Building model...")
-
     mdl = build_model(instance)
+    build_time = time.time() - build_start
+    print("Model built in", build_time, "seconds")
 
-
-    #get time needed to build the model
-    curr = time.time()-start
-
-    print("Model built in ", curr, " seconds")
-
-    #set time limit for the solver as the remaining time
-    args.time = args.time - curr
-
-    #print remaining time
-    print("Time remaining for the solver: ", args.time, " seconds")
-
-
+    # Set time limit for the solver as the remaining time.
+    args.time = args.time - build_time
+    print("Time remaining for the solver:", args.time, "seconds")
     if args.time:
         mdl.parameters.timelimit = args.time
     
-    # Optionally, adjust solver parameters, e.g., MIP gap tolerance
-    mdl.parameters.mip.tolerances.mipgap = 0.01  # 1% gap tolerance
-
-    # Print the number of variables and constraints
+    # Print the number of variables and constraints.
     print("Number of variables:", mdl.number_of_variables)
     print("Number of constraints:", mdl.number_of_constraints)
     
+    # Register our custom progress listener to track progress.
+    listener = MyProgressListener()
+    mdl.add_progress_listener(listener)
+
+    # Solve the model.
+    solve_start = time.time()
     solution = mdl.solve(log_output=True)
+    solve_time = time.time() - solve_start
+
+    # Write log information.
+    with open(log_filename, "w") as flog:
+        flog.write("Log for instance: {}\n".format(args.instance_file))
+        flog.write("Time to build model: {:.2f} seconds\n".format(build_time))
+        flog.write("Number of variables: {}\n".format(mdl.number_of_variables))
+        flog.write("Number of constraints: {}\n".format(mdl.number_of_constraints))
+        flog.write("Total solve time: {:.2f} seconds\n".format(solve_time))
+        if solution:
+            # Use the listener values (if they were captured) and final solution details.
+            flog.write("Time to first solution: {} seconds\n".format(listener.first_solution_time))
+            flog.write("First solution value: {}\n".format(listener.first_solution_value))
+            flog.write("Gap to optimum: {}\n".format(listener.gap))
+            flog.write("Best solution value: {}\n".format(solution.objective_value))
+        else:
+            flog.write("No solution found.\n")
+    
+    # Output solution if available.
     if solution:
         print("Objective value:", solution.objective_value)
         with open(args.solution, "w") as fsol:
@@ -260,8 +318,7 @@ def main():
                         break
                 fsol.write(f"{i} {start_chosen}\n")
     else:
-        print("No solution found.") 
-
+        print("No solution found.")
 
 if __name__ == "__main__":
     main()
