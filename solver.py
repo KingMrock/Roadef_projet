@@ -260,8 +260,8 @@ def main():
     interventions = instance["Interventions"]
     
     # Prepare the log file name based on the instance file name.
-    base_name = os.path.splitext(args.instance_file)[0]
-    log_filename = base_name + "_log.txt"
+    instance_basename = os.path.splitext(os.path.basename(args.instance_file))[0]
+    log_filename = log_filename = f"{instance_basename}_time{args.time}_log.txt"
 
     # Get start time for model building.
     build_start = time.time()

@@ -3,7 +3,7 @@ import os
 import subprocess
 
 # Set the time limit (in seconds) and base directory containing the JSON instances.
-TIME_LIMIT = 1800  # 30 minutes
+TIME_LIMIT = 900  # 15 minutes
 BASE_DIR = "/data/storage/PRJ"  # Adjust if needed
 SOLVER_SCRIPT = "solver.py"      # Assumes solver.py is in the same folder as this script
 
@@ -21,12 +21,11 @@ def find_json_files(base_dir):
 def run_solver(instance_file):
     """
     Run solver.py on a given instance file.
-    The solution file will be in the same directory as the instance file,
+    The solution file will be in the directory from where this program is launched,
     with the same base name and a .txt extension.
     """
-    instance_dir = os.path.dirname(instance_file)
     instance_basename = os.path.splitext(os.path.basename(instance_file))[0]
-    solution_file = os.path.join(instance_dir, instance_basename + ".txt")
+    solution_file = os.path.join(os.getcwd(), instance_basename + ".txt")
     
     cmd = [
         "python3",
